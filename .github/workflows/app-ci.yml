@@ -179,6 +179,6 @@ jobs:
       - name: Build Docker image
         if: inputs.run-docker-build
         env:
-          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+          BUILD_CONTEXT: ${{ inputs.docker-context }}
           DOCKERFILE: ${{ inputs.dockerfile }}
-        run: docker build --file "$DOCKERFILE" --tag "app-ci:${{ github.sha }}" "$DOCKER_CONTEXT"
+        run: docker build --file "$DOCKERFILE" --tag "app-ci:${{ github.sha }}" "$BUILD_CONTEXT"
