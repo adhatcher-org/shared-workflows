@@ -1,0 +1,184 @@
+name: Application CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version used by the application
+        required: true
+        type: string
+      dependency-manager:
+        description: Python dependency manager (uv, poetry, or pip)
+        required: true
+        type: string
+      project-directory:
+        description: Directory containing the Python project
+        required: false
+        default: .
+        type: string
+      uv-version:
+        description: UV version to install
+        required: false
+        default: 0.11.7
+        type: string
+      poetry-version:
+        description: Poetry version to install
+        required: false
+        default: 2.3.2
+        type: string
+      use-node:
+        description: Install Node and npm dependencies
+        required: false
+        default: false
+        type: boolean
+      node-version:
+        description: Node version used by the application
+        required: false
+        default: "22"
+        type: string
+      node-directory:
+        description: Directory containing package-lock.json
+        required: false
+        default: .
+        type: string
+      run-lint:
+        required: false
+        default: false
+        type: boolean
+      run-typecheck:
+        required: false
+        default: false
+        type: boolean
+      run-tests:
+        required: false
+        default: true
+        type: boolean
+      run-coverage:
+        required: false
+        default: true
+        type: boolean
+      run-security:
+        required: false
+        default: true
+        type: boolean
+      run-docker-build:
+        required: false
+        default: true
+        type: boolean
+      docker-context:
+        required: false
+        default: .
+        type: string
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate inputs
+        env:
+          DEPENDENCY_MANAGER: ${{ inputs.dependency-manager }}
+        run: |
+          case "$DEPENDENCY_MANAGER" in
+            uv|poetry|pip) ;;
+            *) echo "Unsupported dependency manager: $DEPENDENCY_MANAGER" >&2; exit 1 ;;
+          esac
+
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install UV
+        if: inputs.dependency-manager == 'uv'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ inputs.uv-version }}
+          enable-cache: true
+
+      - name: Install Poetry
+        if: inputs.dependency-manager == 'poetry'
+        env:
+          POETRY_VERSION: ${{ inputs.poetry-version }}
+        run: python -m pip install "poetry==$POETRY_VERSION"
+
+      - name: Configure Poetry
+        if: inputs.dependency-manager == 'poetry'
+        run: poetry config virtualenvs.in-project true
+
+      - name: Set up Node
+        if: inputs.use-node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.node-directory }}/package-lock.json
+
+      - name: Install UV dependencies
+        if: inputs.dependency-manager == 'uv'
+        working-directory: ${{ inputs.project-directory }}
+        run: uv sync --frozen
+
+      - name: Install Poetry dependencies
+        if: inputs.dependency-manager == 'poetry'
+        working-directory: ${{ inputs.project-directory }}
+        run: poetry install
+
+      - name: Install pip dependencies
+        if: inputs.dependency-manager == 'pip'
+        working-directory: ${{ inputs.project-directory }}
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip setuptools wheel
+          .venv/bin/python -m pip install ".[dev]"
+
+      - name: Install Node dependencies
+        if: inputs.use-node
+        working-directory: ${{ inputs.node-directory }}
+        run: npm ci
+
+      - name: Run lint
+        if: inputs.run-lint
+        run: make lint
+
+      - name: Run type checks
+        if: inputs.run-typecheck
+        run: make typecheck
+
+      - name: Run tests
+        if: inputs.run-tests
+        run: make test
+
+      - name: Run coverage
+        if: inputs.run-coverage
+        run: make coverage
+
+      - name: Run security checks
+        if: inputs.run-security
+        run: make security
+
+      - name: Upload coverage artifact
+        if: inputs.run-coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ github.event.repository.name }}
+          path: "**/coverage.xml"
+          if-no-files-found: ignore
+
+      - name: Build Docker image
+        if: inputs.run-docker-build
+        env:
+          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: docker build --file "$DOCKERFILE" --tag "app-ci:${{ github.sha }}" "$DOCKER_CONTEXT"
