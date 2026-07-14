@@ -29,7 +29,7 @@ on:
         type: string
       create-git-tag:
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -62,6 +62,8 @@ jobs:
           CURRENT_DATE="$(TZ="$RELEASE_TIMEZONE" date +'%Y.%m.%d')"
           OWNER="${{ github.repository_owner }}"
 
+          # Git tags are the canonical version history. Unlike GHCR package
+          # metadata, they are available to the workflow token in every repo.
           GIT_TAGS="$(git tag --list "$CURRENT_DATE-*" || true)"
           PACKAGE_TAGS="$({
             gh api --paginate "/orgs/$OWNER/packages/container/$PACKAGE_NAME/versions" \
