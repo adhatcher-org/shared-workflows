@@ -29,7 +29,7 @@ on:
         type: string
       create-git-tag:
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -40,6 +40,9 @@ jobs:
   publish:
     name: Publish container
     runs-on: ubuntu-latest
+    concurrency:
+      group: docker-publish-${{ github.repository }}-${{ inputs.package-name }}
+      cancel-in-progress: false
 
     env:
       REGISTRY: ghcr.io
@@ -61,10 +64,16 @@ jobs:
         run: |
           CURRENT_DATE="$(TZ="$RELEASE_TIMEZONE" date +'%Y.%m.%d')"
           OWNER="${{ github.repository_owner }}"
+          OWNER_TYPE="$(gh api "/users/$OWNER" --jq .type)"
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            PACKAGE_OWNER_PATH="orgs"
+          else
+            PACKAGE_OWNER_PATH="users"
+          fi
 
           GIT_TAGS="$(git tag --list "$CURRENT_DATE-*" || true)"
           PACKAGE_TAGS="$({
-            gh api --paginate "/orgs/$OWNER/packages/container/$PACKAGE_NAME/versions" \
+            gh api --paginate "/$PACKAGE_OWNER_PATH/$OWNER/packages/container/$PACKAGE_NAME/versions" \
               --jq '.[] | .metadata.container.tags[]?' 2>/dev/null || true
           })"
 
