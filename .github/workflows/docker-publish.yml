@@ -41,7 +41,7 @@ jobs:
     name: Publish container
     runs-on: ubuntu-latest
     concurrency:
-      group: docker-publish-${{ github.repository }}-${{ inputs.package-name }}
+      group: docker-publish-${{ github.repository }}
       cancel-in-progress: false
 
     env:
