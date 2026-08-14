@@ -1,0 +1,133 @@
+name: Docker Publish
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Lowercase GHCR package name
+        required: true
+        type: string
+      checkout-ref:
+        description: Caller commit to build
+        required: true
+        type: string
+      platforms:
+        required: false
+        default: linux/amd64,linux/arm64
+        type: string
+      release-timezone:
+        required: false
+        default: America/New_York
+        type: string
+      docker-context:
+        required: false
+        default: .
+        type: string
+      dockerfile:
+        required: false
+        default: Dockerfile
+        type: string
+      create-git-tag:
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    name: Publish container
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docker-publish-${{ github.repository }}
+      cancel-in-progress: false
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository_owner }}/${{ inputs.package-name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.checkout-ref }}
+
+      - name: Calculate image version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          RELEASE_TIMEZONE: ${{ inputs.release-timezone }}
+        run: |
+          CURRENT_DATE="$(TZ="$RELEASE_TIMEZONE" date +'%Y.%m.%d')"
+          OWNER="${{ github.repository_owner }}"
+          OWNER_TYPE="$(gh api "/users/$OWNER" --jq .type)"
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            PACKAGE_OWNER_PATH="orgs"
+          else
+            PACKAGE_OWNER_PATH="users"
+          fi
+
+          # Git tags are the canonical version history. Unlike GHCR package
+          # metadata, they are available to the workflow token in every repo.
+          GIT_TAGS="$(git tag --list "$CURRENT_DATE-*" || true)"
+          PACKAGE_TAGS="$({
+            gh api --paginate "/$PACKAGE_OWNER_PATH/$OWNER/packages/container/$PACKAGE_NAME/versions" \
+              --jq '.[] | .metadata.container.tags[]?' 2>/dev/null || true
+          })"
+
+          LATEST_BUILD="$({
+            printf '%s\n%s\n' "$GIT_TAGS" "$PACKAGE_TAGS" |
+              sed -n "s/^$CURRENT_DATE-\([0-9][0-9]*\)$/\1/p" |
+              sort -n |
+              tail -1
+          })"
+
+          if [ -z "$LATEST_BUILD" ]; then
+            BUILD_NUMBER=1
+          else
+            BUILD_NUMBER=$((LATEST_BUILD + 1))
+          fi
+
+          VERSION="$CURRENT_DATE-$BUILD_NUMBER"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ inputs.docker-context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          platforms: ${{ inputs.platforms }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.created=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create matching Git tag
+        if: inputs.create-git-tag
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git tag "$VERSION"
+          git push origin "refs/tags/$VERSION"
